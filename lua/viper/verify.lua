@@ -1,10 +1,53 @@
-local M = {}
+local M       = {}
 local lsp     = require("viper.lsp")
 local config  = require("viper.config")
 local project = require("viper.project")
 
+local state   = {}
+
+local function set_ready(filename, error, time)
+    local old_state = state[filename or ""]
+    local opts = { kind = "progress", status = error == nil and "success" or "failed", percent = 100, source = "viper" }
+    if old_state ~= nil then
+        opts.id = old_state.id
+    end
+    local msg = "[viper] " .. filename
+    if error ~= nil then
+        msg = msg .. " " .. error
+    else
+        msg = msg .. " verified"
+    end
+    if time ~= nil then
+        msg = msg .. (" (%.2fs)"):format(time)
+    end
+    vim.api.nvim_echo({ { msg } }, false, opts)
+    state[filename or ""] = {
+        kind = "ready",
+        success = error == nil,
+        error = error,
+    }
+end
+local function set_progress(filename, progress, new_state)
+    local old_state = state[filename or ""]
+    local opts = { kind = "progress", status = "running", percent = progress > 0 and progress or 0, source = "viper" }
+    if old_state ~= nil then
+        opts.id = old_state.id
+    end
+    local id = vim.api.nvim_echo({ { filename } }, false, opts)
+
+    state[filename or ""] = {
+        kind = "running",
+        progress = progress,
+        id = id
+    }
+end
+
+function M.get_state(filename)
+    return state[filename]
+end
+
 -- VerificationState values (mirror ViperProtocol.ts)
-local State = {
+local State   = {
     Stopped                  = 0,
     Starting                 = 1,
     VerificationRunning      = 2,
@@ -29,7 +72,7 @@ local Success = {
     Timeout            = 7,
 }
 
-local ns = vim.api.nvim_create_namespace("viper_verify")
+local ns      = vim.api.nvim_create_namespace("viper_verify")
 
 local function uri_to_bufnr(uri)
     if not uri then return nil end
@@ -53,36 +96,53 @@ local function on_state_change(params)
     local bufnr = uri_to_bufnr(params.uri)
     local new_state = params.newState
 
-    if new_state == State.VerificationRunning or new_state == State.Starting or new_state == State.ConstructingAst then
+    if new_state == State.ConstructingAst then
         if bufnr then clear_diagnostics(bufnr) end
-        local pct = params.progress and math.floor(params.progress) or 0
         vim.notify(
-            ("[viper] %s %s%s"):format(
+            ("[viper] %s %s"):format(
                 params.filename or "",
-                state_label(new_state),
-                pct > 0 and (" " .. pct .. "%") or ""
+                state_label(new_state)
             ),
             vim.log.levels.INFO
         )
+    elseif new_state == State.VerificationRunning or new_state == State.Starting then
+        if bufnr then clear_diagnostics(bufnr) end
+        local pct = params.progress and math.floor(params.progress) or 0
+        -- vim.notify(
+        --     ("[viper] %s %s%s"):format(
+        --         params.filename or "",
+        --         state_label(new_state),
+        --         pct > 0 and (" " .. pct .. "%") or ""
+        --     ),
+        --     vim.log.levels.INFO
+        -- )
+        set_progress(params.filename, pct, new_state)
     elseif new_state == State.Ready then
         local success = params.success
         if success == Success.Success then
             vim.notify(
-                ("[viper] %s verified ✓ (%.2fs)"):format(params.filename or "", (params.time or 0) / 1000),
+                ("[viper] %s verified ✓ (%.2fs)"):format(params.filename or "", params.time or 0),
                 vim.log.levels.INFO
             )
+            set_ready(params.filename, nil, params.time)
         elseif success == Success.VerificationFailed then
-            vim.notify(("[viper] %s verification failed"):format(params.filename or ""), vim.log.levels.WARN)
+            vim.notify(("[viper] %s verification failed"):format(params.filename or ""), vim.log.levels.ERROR)
+            set_ready(params.filename, "verification failed")
         elseif success == Success.ParsingFailed then
             vim.notify(("[viper] %s parse error"):format(params.filename or ""), vim.log.levels.ERROR)
+            set_ready(params.filename, "parse error")
         elseif success == Success.TypecheckingFailed then
             vim.notify(("[viper] %s type error"):format(params.filename or ""), vim.log.levels.ERROR)
+            set_ready(params.filename, "type error")
         elseif success == Success.Timeout then
             vim.notify(("[viper] %s timeout"):format(params.filename or ""), vim.log.levels.WARN)
+            set_ready(params.filename, "timeout")
         elseif success == Success.Aborted then
             vim.notify("[viper] verification aborted", vim.log.levels.INFO)
+            set_ready(params.filename, "aborted")
         elseif success == Success.Error then
             vim.notify(("[viper] internal error: %s"):format(params.error or ""), vim.log.levels.ERROR)
+            set_ready(params.filename, ("internal error: %s"):format(params.error or ""))
         end
     elseif new_state == State.Stage then
         vim.notify(("[viper] stage: %s"):format(params.stage or ""), vim.log.levels.INFO)
