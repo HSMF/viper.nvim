@@ -1,0 +1,3 @@
+-- Loaded automatically by Neovim's plugin system.
+-- Users call require("viper").setup({}) to configure; this file is a no-op
+-- if they don't, so the plugin is inert until explicitly initialized.
