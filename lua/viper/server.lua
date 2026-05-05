@@ -44,9 +44,17 @@ function M.ensure_started(cb)
         opts.server_args
     )
 
+    -- Inject JVM heap/stack flags via JAVA_TOOL_OPTIONS so they apply even
+    -- when viperserver is a wrapper that calls `java -jar` without -Xss/-Xmx.
+    local extra_env = {}
+    if opts.jvm_args and opts.jvm_args ~= "" then
+        extra_env.JAVA_TOOL_OPTIONS = opts.jvm_args
+    end
+
     local stdout_buf = ""
 
     state.proc = vim.system(cmd, {
+        env = extra_env,
         stdout = function(err, data)
             if err or not data then return end
             stdout_buf = stdout_buf .. data
@@ -57,12 +65,12 @@ function M.ensure_started(cb)
             end
         end,
         stderr = function(err, data)
-            if data and #data > 0 then
-                -- only log non-empty stderr
-                vim.schedule(function()
-                    vim.notify("[viper] server: " .. data, vim.log.levels.WARN)
-                end)
-            end
+            if not data or #data == 0 then return end
+            -- Suppress the JVM startup banner printed when JAVA_TOOL_OPTIONS is set.
+            if data:match("^Picked up JAVA_TOOL_OPTIONS") then return end
+            vim.schedule(function()
+                vim.notify("[viper] server: " .. data, vim.log.levels.WARN)
+            end)
         end,
     }, function(result)
         -- process exited
