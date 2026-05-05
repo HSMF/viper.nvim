@@ -108,7 +108,7 @@ M._make_handlers = make_handlers
 
 --- Perform GetVersion handshake; log incompatibility but don't abort.
 local function version_handshake(client)
-    client.request(Cmd.GetVersion, { clientVersion = "5.0.0" }, function(err, result)
+    client:request(Cmd.GetVersion, { clientVersion = "5.0.0" }, function(err, result)
         if err then
             vim.notify("[viper] GetVersion error: " .. vim.inspect(err), vim.log.levels.WARN)
             return
