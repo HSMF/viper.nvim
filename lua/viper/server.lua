@@ -2,9 +2,12 @@ local M = {}
 local config = require("viper.config")
 
 local state = {
-    proc = nil,   -- vim.SystemObj
-    port = nil,   -- number, set once server announces it
-    callbacks = {}, -- queued callbacks waiting for port
+    ---@type vim.SystemObj|nil
+    proc = nil,
+    ---@type number|nil
+    port = nil,
+    ---@type table<function<number,number>>
+    callbacks = {},
 }
 
 -- Exposed for testing only.
@@ -44,8 +47,6 @@ function M.ensure_started(cb)
         opts.server_args
     )
 
-    -- Inject JVM heap/stack flags via JAVA_TOOL_OPTIONS so they apply even
-    -- when viperserver is a wrapper that calls `java -jar` without -Xss/-Xmx.
     local extra_env = {}
     if opts.jvm_args and opts.jvm_args ~= "" then
         extra_env.JAVA_TOOL_OPTIONS = opts.jvm_args
@@ -87,7 +88,7 @@ function M.ensure_started(cb)
     end)
 end
 
---- Stop viperserver (called on VimLeavePre).
+--- Stop viperserver
 function M.stop()
     if state.proc then
         state.proc:kill(15) -- SIGTERM

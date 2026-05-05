@@ -21,11 +21,10 @@ syn keyword viperNull null
 
 syn keyword viperType Int Bool Perm Ref Seq Set Multiset Map
 
-" Specification keywords (distinct color)
 syn keyword viperSpec
       \ requires ensures invariant
       \ forall exists
-      \ acc wildcard write none read epsilon
+      \ acc wildcard write none epsilon
       \ unfolding in
       \ old result
 

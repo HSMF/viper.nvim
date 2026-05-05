@@ -1,14 +1,10 @@
 local M = {}
 
 M.defaults = {
-    -- command to start viperserver (must be on $PATH)
     server_cmd = "viperserver",
     -- extra args passed to viperserver
     server_args = {},
-    -- JVM flags injected via JAVA_TOOL_OPTIONS before the server jar runs.
-    -- The viperserver wrapper typically does not set -Xss/-Xmx; without a
-    -- large stack (-Xss128m) Viper's recursive verifier hits StackOverflowError
-    -- on any non-trivial file.
+    -- extra args passed to the jvm
     jvm_args = "-Xss128m -Xmx2048m",
     -- log level: OFF ERROR INFO DEBUG TRACE ALL
     log_level = "INFO",

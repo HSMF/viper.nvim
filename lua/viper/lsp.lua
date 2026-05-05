@@ -5,14 +5,13 @@ local config = require("viper.config")
 -- client_id once started
 M.client_id = nil
 
--- ViperProtocol command names (must match ViperServer's CommandProtocol.scala)
 local Cmd = {
-    -- server → client notifications
+    -- server-client notifications
     StateChange            = "StateChange",
     Log                    = "Log",
     Hint                   = "Hint",
     VerificationNotStarted = "VerificationNotStarted",
-    -- client → server notifications
+    -- client-server notifications
     Verify                 = "Verify",
     -- requests (bidirectional)
     GetVersion             = "GetVersion",
