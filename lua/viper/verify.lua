@@ -1,6 +1,7 @@
 local M = {}
-local lsp = require("viper.lsp")
-local config = require("viper.config")
+local lsp     = require("viper.lsp")
+local config  = require("viper.config")
+local project = require("viper.project")
 
 -- VerificationState values (mirror ViperProtocol.ts)
 local State = {
@@ -36,11 +37,8 @@ local function uri_to_bufnr(uri)
     return ok and bufnr or nil
 end
 
---- Clear diagnostics for bufnr (or all viper bufs).
 local function clear_diagnostics(bufnr)
-    if bufnr then
-        vim.diagnostic.reset(ns, bufnr)
-    end
+    if bufnr then vim.diagnostic.reset(ns, bufnr) end
 end
 
 local function state_label(s)
@@ -74,10 +72,7 @@ local function on_state_change(params)
                 vim.log.levels.INFO
             )
         elseif success == Success.VerificationFailed then
-            vim.notify(
-                ("[viper] %s verification failed"):format(params.filename or ""),
-                vim.log.levels.WARN
-            )
+            vim.notify(("[viper] %s verification failed"):format(params.filename or ""), vim.log.levels.WARN)
         elseif success == Success.ParsingFailed then
             vim.notify(("[viper] %s parse error"):format(params.filename or ""), vim.log.levels.ERROR)
         elseif success == Success.TypecheckingFailed then
@@ -87,48 +82,71 @@ local function on_state_change(params)
         elseif success == Success.Aborted then
             vim.notify("[viper] verification aborted", vim.log.levels.INFO)
         elseif success == Success.Error then
-            vim.notify(
-                ("[viper] internal error: %s"):format(params.error or ""),
-                vim.log.levels.ERROR
-            )
+            vim.notify(("[viper] internal error: %s"):format(params.error or ""), vim.log.levels.ERROR)
         end
     elseif new_state == State.Stage then
-        vim.notify(
-            ("[viper] stage: %s"):format(params.stage or ""),
-            vim.log.levels.INFO
-        )
+        vim.notify(("[viper] stage: %s"):format(params.stage or ""), vim.log.levels.INFO)
     end
 end
 
 M._on_state_change = on_state_change
 
---- Send Verify notification for the given buffer.
-function M.verify(bufnr, manually_triggered)
-    bufnr = bufnr or vim.api.nvim_get_current_buf()
+--- Return the content for a URI: use buffer if loaded, otherwise read from disk.
+local function content_for_uri(uri)
+    local ok, bufnr = pcall(vim.uri_to_bufnr, uri)
+    if ok and vim.api.nvim_buf_is_loaded(bufnr) then
+        return table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), "\n")
+    end
+    local path = vim.uri_to_fname(uri)
+    local ok2, lines = pcall(vim.fn.readfile, path)
+    if ok2 then return table.concat(lines, "\n") end
+    return nil
+end
+
+M._content_for_uri = content_for_uri
+
+--- Return the workspace root for a URI.
+local function workspace_for_uri(uri)
+    local path = vim.uri_to_fname(uri)
+    return vim.fs.root(path, { ".git" }) or vim.fn.fnamemodify(path, ":h")
+end
+
+--- Send Verify notification for a URI (file may or may not be open in a buffer).
+function M.verify_uri(uri, manually_triggered)
     local client = lsp.client()
     if not client then
         vim.notify("[viper] LSP client not ready yet", vim.log.levels.WARN)
         return
     end
 
-    local uri = vim.uri_from_bufnr(bufnr)
-    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local content = table.concat(lines, "\n")
-    local opts = config.options
+    local content = content_for_uri(uri)
+    if not content then
+        vim.notify("[viper] cannot read content for " .. uri, vim.log.levels.WARN)
+        return
+    end
 
+    local opts = config.options
     client.notify(lsp.Cmd.Verify, {
         uri               = uri,
         content           = content,
         manuallyTriggered = manually_triggered ~= false,
-        workspace         = vim.fs.root(bufnr, { ".git" }) or vim.fn.getcwd(),
+        workspace         = workspace_for_uri(uri),
         backend           = opts.backend,
         customArgs        = opts.custom_args,
     })
 end
 
+--- Send Verify notification for the given buffer.
+--- If the buffer's file is an imported dependency, verifies its project root instead.
+function M.verify(bufnr, manually_triggered)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
+    local uri = vim.uri_from_bufnr(bufnr)
+    local root_uri = project.root_for(uri)
+    M.verify_uri(root_uri or uri, manually_triggered)
+end
+
 --- Set up autocmds and the :Verify command for a viper buffer.
 function M.setup_buffer(bufnr)
-    -- Wire state-change handler through lsp module
     lsp.on_state_change = on_state_change
 
     local augroup = vim.api.nvim_create_augroup("ViperVerify_" .. bufnr, { clear = true })
@@ -143,7 +161,6 @@ function M.setup_buffer(bufnr)
         })
     end
 
-    -- :Verify always available regardless of auto_verify setting
     vim.api.nvim_buf_create_user_command(bufnr, "Verify", function()
         M.verify(bufnr, true)
     end, { desc = "Verify current Viper file" })

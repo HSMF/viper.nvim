@@ -94,9 +94,12 @@ local function make_handlers()
             return { fileEndings = { ".vpr", ".sil" } }
         end,
 
-        -- Server asks to pin this file to a project root.
-        -- No client action needed; respond with null (vim.NIL) to satisfy RPC.
-        [Cmd.SetupProject]           = function()
+        -- Server tells us which files are imported by a project root.
+        -- Populate the project map so saves to imported files trigger root verification.
+        [Cmd.SetupProject]           = function(err, params)
+            if not err and params and params.projectUri then
+                require("viper.project").setup(params.projectUri, params.otherUris or {})
+            end
             return vim.NIL
         end,
     }

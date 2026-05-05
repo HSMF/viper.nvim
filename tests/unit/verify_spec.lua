@@ -1,6 +1,7 @@
-local config = require("viper.config")
-local lsp    = require("viper.lsp")
-local verify = require("viper.verify")
+local config  = require("viper.config")
+local lsp     = require("viper.lsp")
+local project = require("viper.project")
+local verify  = require("viper.verify")
 
 -- VerificationState / Success mirrors (must match verify.lua)
 local State = { Ready = 6, VerificationRunning = 2, Starting = 1, Stage = 8, ConstructingAst = 9 }
@@ -133,6 +134,7 @@ describe("viper.verify.verify (Verify notification params)", function()
     end
 
     local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".vpr")
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "method foo() { }" })
 
     verify.verify(bufnr, true)
@@ -198,5 +200,165 @@ describe("viper.verify.setup_buffer", function()
     local bufnr = vim.api.nvim_create_buf(false, true)
     verify.setup_buffer(bufnr)
     assert.is_function(lsp.on_state_change)
+  end)
+end)
+
+-- ── Import-aware verification ──────────────────────────────────────────────────
+
+local function fake_client(sent)
+  return {
+    notify = function(method, params) table.insert(sent, { method = method, params = params }) end,
+    id = 888,
+  }
+end
+
+local function with_fake_client(sent, fn)
+  lsp.client_id = 888
+  local orig = vim.lsp.get_client_by_id
+  vim.lsp.get_client_by_id = function(id)
+    return id == 888 and fake_client(sent) or orig(id)
+  end
+  fn()
+  vim.lsp.get_client_by_id = orig
+  lsp.client_id = nil
+end
+
+describe("viper.verify import-aware (verify_uri / verify redirect)", function()
+  before_each(function()
+    config.setup({ backend = "silicon", custom_args = "" })
+    project.clear()
+  end)
+
+  -- ── content_for_uri ──────────────────────────────────────────────────────
+
+  describe("_content_for_uri", function()
+    it("returns buffer content when buffer is loaded", function()
+      local bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_name(bufnr, vim.fn.tempname() .. ".vpr")
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "method bar()" })
+      local uri = vim.uri_from_bufnr(bufnr)
+      assert.matches("method bar", verify._content_for_uri(uri))
+    end)
+
+    it("reads from disk when buffer not loaded", function()
+      local path = vim.fn.tempname() .. ".vpr"
+      vim.fn.writefile({ "// disk content" }, path)
+      local uri = vim.uri_from_fname(path)
+      assert.matches("disk content", verify._content_for_uri(uri))
+    end)
+
+    it("returns nil when file does not exist and no buffer", function()
+      local uri = vim.uri_from_fname("/nonexistent/path/x.vpr")
+      assert.is_nil(verify._content_for_uri(uri))
+    end)
+  end)
+
+  -- ── verify_uri ─────────────────────────────────────────────────────────────
+
+  describe("verify_uri", function()
+    it("sends Verify with the given URI directly", function()
+      local path = vim.fn.tempname() .. ".vpr"
+      vim.fn.writefile({ "method foo()" }, path)
+      local uri = vim.uri_from_fname(path)
+
+      local sent = {}
+      with_fake_client(sent, function()
+        verify.verify_uri(uri, true)
+      end)
+
+      assert.equals(1, #sent)
+      assert.equals("Verify", sent[1].method)
+      assert.equals(uri, sent[1].params.uri)
+      assert.matches("method foo", sent[1].params.content)
+    end)
+  end)
+
+  -- ── verify redirects to project root ──────────────────────────────────────
+
+  describe("verify (import redirect)", function()
+    it("verifies the root when buffer file is an imported dependency", function()
+      -- Set up: root imports dep
+      local root_path = vim.fn.tempname() .. ".vpr"
+      local dep_path  = vim.fn.tempname() .. ".vpr"
+      vim.fn.writefile({ "import \"dep.vpr\"" }, root_path)
+      vim.fn.writefile({ "// dep" }, dep_path)
+
+      local root_uri = vim.uri_from_fname(root_path)
+      local dep_uri  = vim.uri_from_fname(dep_path)
+
+      project.setup(root_uri, { dep_uri })
+
+      -- Open dep in a buffer
+      local dep_bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_name(dep_bufnr, dep_path)
+      vim.api.nvim_buf_set_lines(dep_bufnr, 0, -1, false, { "// dep modified" })
+
+      local sent = {}
+      with_fake_client(sent, function()
+        verify.verify(dep_bufnr, false)
+      end)
+
+      assert.equals(1, #sent)
+      -- Must verify the ROOT, not the dep
+      assert.equals(root_uri, sent[1].params.uri)
+    end)
+
+    it("verifies the buffer itself when not an imported file", function()
+      local root_path = vim.fn.tempname() .. ".vpr"
+      vim.fn.writefile({ "method main()" }, root_path)
+      local root_uri = vim.uri_from_fname(root_path)
+
+      -- root is not pinned to anything
+      local bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_name(bufnr, root_path)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { "method main()" })
+
+      local sent = {}
+      with_fake_client(sent, function()
+        verify.verify(bufnr, true)
+      end)
+
+      assert.equals(1, #sent)
+      assert.equals(root_uri, sent[1].params.uri)
+    end)
+  end)
+
+  -- ── SetupProject handler populates project map ─────────────────────────────
+
+  describe("SetupProject handler via lsp._make_handlers", function()
+    it("populates project.root_for after SetupProject", function()
+      local lsp_mod = require("viper.lsp")
+      local handlers = lsp_mod._make_handlers()
+
+      local root_uri = "file:///tmp/root.vpr"
+      local dep_uri  = "file:///tmp/dep.vpr"
+
+      handlers["SetupProject"](nil, { projectUri = root_uri, otherUris = { dep_uri } })
+
+      assert.equals(root_uri, project.root_for(dep_uri))
+      assert.is_nil(project.root_for(root_uri))
+    end)
+
+    it("replaces old mappings on re-setup", function()
+      local lsp_mod = require("viper.lsp")
+      local handlers = lsp_mod._make_handlers()
+
+      local root_uri  = "file:///tmp/root.vpr"
+      local dep_a_uri = "file:///tmp/a.vpr"
+      local dep_b_uri = "file:///tmp/b.vpr"
+
+      handlers["SetupProject"](nil, { projectUri = root_uri, otherUris = { dep_a_uri, dep_b_uri } })
+      handlers["SetupProject"](nil, { projectUri = root_uri, otherUris = { dep_a_uri } })
+
+      assert.equals(root_uri, project.root_for(dep_a_uri))
+      assert.is_nil(project.root_for(dep_b_uri))
+    end)
+
+    it("returns vim.NIL (valid RPC response)", function()
+      local lsp_mod = require("viper.lsp")
+      local handlers = lsp_mod._make_handlers()
+      local result = handlers["SetupProject"](nil, { projectUri = "file:///x.vpr", otherUris = {} })
+      assert.equals(vim.NIL, result)
+    end)
   end)
 end)
