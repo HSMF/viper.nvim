@@ -58,6 +58,7 @@ function M.ensure_started(cb)
         env = extra_env,
         stdout = function(err, data)
             if err or not data then return end
+            if state.port then return end
             stdout_buf = stdout_buf .. data
             local p = M._parse_port(stdout_buf)
             if p and not state.port then
