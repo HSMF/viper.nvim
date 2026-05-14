@@ -70,6 +70,7 @@ function M.ensure_started(cb)
             if not data or #data == 0 then return end
             -- Suppress the JVM startup banner printed when JAVA_TOOL_OPTIONS is set.
             if data:match("^Picked up JAVA_TOOL_OPTIONS") then return end
+            if data:match("^java.lang.InterruptedException") then return end
             vim.schedule(function()
                 vim.notify("[viper] server: " .. data, vim.log.levels.WARN)
             end)
