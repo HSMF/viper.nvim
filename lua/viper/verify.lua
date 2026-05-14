@@ -33,7 +33,13 @@ local function set_progress(filename, progress, new_state)
     if old_state ~= nil then
         opts.id = old_state.id
     end
-    local id = vim.api.nvim_echo({ { filename } }, false, opts)
+    local ok, id = pcall(vim.api.nvim_echo, { { filename } }, false, opts)
+    if not ok then
+        vim.print(opts)
+        vim.print(filename)
+        return
+    end
+
 
     state[filename or ""] = {
         kind = "running",
@@ -98,13 +104,13 @@ local function on_state_change(params)
 
     if new_state == State.ConstructingAst then
         if bufnr then clear_diagnostics(bufnr) end
-        vim.notify(
-            ("[viper] %s %s"):format(
-                params.filename or "",
-                state_label(new_state)
-            ),
-            vim.log.levels.INFO
-        )
+        -- vim.notify(
+        --     ("[viper] %s %s"):format(
+        --         params.filename or "",
+        --         state_label(new_state)
+        --     ),
+        --     vim.log.levels.INFO
+        -- )
     elseif new_state == State.VerificationRunning or new_state == State.Starting then
         if bufnr then clear_diagnostics(bufnr) end
         local pct = params.progress and math.floor(params.progress) or 0
@@ -186,7 +192,9 @@ function M.verify_uri(uri, manually_triggered)
     end
 
     local opts = config.options
-    client.notify(lsp.Cmd.Verify, {
+    -- notify's first parameter is too restrictive
+    ---@diagnostic disable-next-line: param-type-mismatch
+    client:notify(lsp.Cmd.Verify, {
         uri               = uri,
         content           = content,
         manuallyTriggered = manually_triggered ~= false,
