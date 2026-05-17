@@ -137,6 +137,16 @@ function M.attach(bufnr)
             return
         end
 
+        -- a concurrent ensure_started callback may have already started the client.
+        if M.client_id then
+            local existing = vim.lsp.get_client_by_id(M.client_id)
+            if existing then
+                vim.lsp.buf_attach_client(bufnr, M.client_id)
+                return
+            end
+            M.client_id = nil
+        end
+
         local client_id = vim.lsp.start({
             name = "viperserver",
             cmd = vim.lsp.rpc.connect("127.0.0.1", port),
